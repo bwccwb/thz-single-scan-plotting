@@ -36,8 +36,11 @@ thzplot.plot_scans([
     ("2026.11.04", "16.19.24", "4 K, grounded, 11/4", "darkred"),  # optional colour
 ])
 
-# voltage instead of smoothed power, custom title, no subtitle
-thzplot.plot_scans(scans, what="voltage", title="Cryostat test", subtitle=None)
+# raw (unsmoothed) voltage, custom title, no subtitle
+thzplot.plot_scans(scans, what="voltage", smooth=0, title="Cryostat test", subtitle=None)
+
+# power with heavier smoothing
+thzplot.plot_scans(scans, smooth=4)
 
 # publication: no title/subtitle, saved as an editable-text PDF
 thzplot.plot_scans(scans, publication=True, save="figures/fig2.pdf")
@@ -49,7 +52,7 @@ thzplot.list_scans("2026.11.02")   # which scans exist on a date?
 
 ```bash
 thzplot "2026.10.02/15.52.35=final bench config" "2026.11.02/13.34.03=4 K@green"
-thzplot 2026.11.02/13.34.03 --what voltage --title "Cryostat test" --subtitle ""
+thzplot 2026.11.02/13.34.03 --what voltage --smooth 0 --title "Cryostat test" --subtitle ""
 thzplot 2026.11.02/13.34.03 --publication --save figures/fig2.pdf
 thzplot --list               # date folders
 thzplot --list 2026.11.02    # scans on that date
@@ -59,17 +62,17 @@ thzplot --list 2026.11.02    # scans on that date
 
 | option | default | meaning |
 |---|---|---|
-| `what` | `"smoothed"` | `"smoothed"`, `"power"` or `"voltage"` |
+| `what` | `"power"` | `"power"` or `"voltage"` (power = voltage²) |
+| `smooth` | `2` | Gaussian smoothing σ in points, applied to either quantity; `0` = raw |
 | `title` | `Benchtop Test w/ Copper Waveguide` | bold title; `None` to hide |
-| `subtitle` | `Resolution 1000 MHz, Time Constant 100 ms, 2σ Smoothing, ~12cm Distance` | `None` to hide |
+| `subtitle` | `Resolution 1000 MHz, Time Constant 100 ms, {smoothing}, ~12cm Distance` | `None` to hide; `{smoothing}` becomes "2σ Smoothing" / "No Smoothing" |
 | `publication` | `False` | hide both titles |
-| `smooth` | `2` | Gaussian σ (points) for `"smoothed"` |
 | `xlim` / `ylim` | `(100, 1400)` / auto | axis limits |
 | `logy` | log for power, linear for voltage | force y scale |
 | `water` | `False` | overlay water-vapour lines |
 | `save` | `None` | output path (`.pdf`, `.png`, `.svg`) |
 
 Change the defaults once in `thzplot/plotting.py` (`DEFAULT_TITLE`, `DEFAULT_SUBTITLE`,
-`DEFAULT_COLORS`, ...).
+`DEFAULT_SMOOTH`, `DEFAULT_COLORS`, ...).
 
 `plot_scans` returns `(fig, ax)` so you can tweak anything further with matplotlib.

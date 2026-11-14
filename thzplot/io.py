@@ -110,10 +110,16 @@ class Scan:
     def power(self):
         return self.df.iloc[:, 3]   # Average Power (arb)
 
-    def smoothed_power(self, sigma: float = 2):
-        """Gaussian-smoothed average power (same method as the original notebook)."""
+    def get(self, what: str = "power", smooth: float = 0):
+        """Return "voltage" or "power", Gaussian-smoothed by ``smooth`` σ (0 = raw).
+
+        Same smoothing method as the original notebook (astropy Gaussian1DKernel).
+        """
+        y = {"voltage": self.volt, "power": self.power}[what]
+        if not smooth:
+            return y
         from astropy.convolution import Gaussian1DKernel, convolve
-        return convolve(self.power, Gaussian1DKernel(sigma))
+        return convolve(y, Gaussian1DKernel(smooth))
 
     def summary(self) -> str:
         h = self.header
