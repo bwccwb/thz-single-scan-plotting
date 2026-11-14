@@ -1,0 +1,15 @@
+# Data lives on Google Drive, never in the repo
+20[0-9][0-9].[0-9][0-9].[0-9][0-9]/
+*.csv
+Scan Notes.txt
+
+# Saved figures
+figures/
+
+# Python
+__pycache__/
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+.DS_Store
