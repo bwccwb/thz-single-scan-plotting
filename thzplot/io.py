@@ -4,6 +4,10 @@ The data always lives on Google Drive. This module finds the Drive data
 folder automatically:
 
 * In Google Colab it mounts Drive and uses ``/content/drive/MyDrive/Data``.
+  If mounting fails (e.g. Colab's "credential propagation was unsuccessful"
+  bug), it falls back to the Google Drive API: it signs in with
+  ``google.colab.auth`` and downloads only the scan files you ask for into
+  ``/content/thz_data``.
 * On your own computer it looks for Google Drive for Desktop
   (macOS: ``~/Library/CloudStorage/GoogleDrive-*/My Drive/Data``,
   Windows: ``G:/My Drive/Data``).
@@ -22,8 +26,110 @@ from pathlib import Path
 import pandas as pd
 
 DRIVE_SUBFOLDER = "Data"  # folder inside "My Drive" that holds the date folders
+API_CACHE_DIR = Path("/content/thz_data")  # where the Colab API fallback stores downloads
 
 _data_dir: Path | None = None
+_remote: "_DriveAPI | None" = None  # set when Colab's Drive mount failed
+
+_FOLDER = "application/vnd.google-apps.folder"
+_SHORTCUT = "application/vnd.google-apps.shortcut"
+
+
+class _DriveAPI:
+    """Read-only access to ``My Drive/Data`` through the Drive API (Colab fallback).
+
+    Used only when ``drive.mount`` fails. Files are downloaded on demand into
+    ``API_CACHE_DIR/<date>/`` so the rest of thzplot can read them like normal files.
+    """
+
+    def __init__(self):
+        from google.colab import auth
+        from googleapiclient.discovery import build
+
+        auth.authenticate_user()
+        self.service = build("drive", "v3", cache_discovery=False)
+        self._folder_ids: dict[str, str] = {}
+        data = self._find(self._children("root"), DRIVE_SUBFOLDER, folder=True)
+        if data is None:
+            raise FileNotFoundError(
+                f"Signed in to Google Drive, but there is no '{DRIVE_SUBFOLDER}' folder "
+                "(or shortcut to one) directly inside My Drive."
+            )
+        self.data_id = data["id"]
+
+    @staticmethod
+    def _quote(s: str) -> str:
+        return s.replace("\\", "\\\\").replace("'", "\\'")
+
+    def _children(self, parent_id: str) -> list[dict]:
+        """All non-trashed items in a folder, with shortcuts resolved to their targets."""
+        items, token = [], None
+        while True:
+            resp = self.service.files().list(
+                q=f"'{self._quote(parent_id)}' in parents and trashed = false",
+                fields="nextPageToken, files(id, name, mimeType, shortcutDetails)",
+                pageSize=1000, pageToken=token,
+                supportsAllDrives=True, includeItemsFromAllDrives=True,
+            ).execute()
+            for f in resp.get("files", []):
+                if f.get("mimeType") == _SHORTCUT and f.get("shortcutDetails"):
+                    d = f["shortcutDetails"]
+                    f = {"id": d["targetId"], "name": f["name"], "mimeType": d["targetMimeType"]}
+                items.append(f)
+            token = resp.get("nextPageToken")
+            if not token:
+                return items
+
+    @staticmethod
+    def _find(items: list[dict], name: str, folder: bool) -> dict | None:
+        for f in items:
+            if f["name"] == name and (f["mimeType"] == _FOLDER) == folder:
+                return f
+        return None
+
+    def _date_id(self, date: str) -> str | None:
+        if date not in self._folder_ids:
+            f = self._find(self._children(self.data_id), date, folder=True)
+            if f is None:
+                return None
+            self._folder_ids[date] = f["id"]
+        return self._folder_ids[date]
+
+    def list_dates(self) -> list[str]:
+        return [f["name"] for f in self._children(self.data_id) if f["mimeType"] == _FOLDER]
+
+    def list_files(self, date: str) -> list[str]:
+        folder = self._date_id(date)
+        if folder is None:
+            return []
+        return [f["name"] for f in self._children(folder) if f["mimeType"] != _FOLDER]
+
+    def download(self, date: str, name: str, dest: Path) -> bool:
+        """Download ``Data/<date>/<name>`` to ``dest``. Returns False if it doesn't exist."""
+        folder = self._date_id(date)
+        f = self._find(self._children(folder), name, folder=False) if folder else None
+        if f is None:
+            return False
+        content = self.service.files().get_media(fileId=f["id"], supportsAllDrives=True).execute()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+        return True
+
+
+def _mount_or_fallback() -> None:
+    """In Colab: mount Drive, or switch to the Drive API if mounting fails."""
+    global _data_dir, _remote
+    try:
+        from google.colab import drive
+        drive.mount("/content/drive")
+        return
+    except Exception as e:  # e.g. MessageError: credential propagation was unsuccessful
+        print(f"Mounting Google Drive failed ({e}).\n"
+              "Falling back to the Google Drive API: scan files will be downloaded "
+              f"on demand into {API_CACHE_DIR}.")
+    _remote = _DriveAPI()
+    API_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _data_dir = API_CACHE_DIR
 
 
 def in_colab() -> bool:
@@ -70,8 +176,9 @@ def get_data_dir() -> Path:
         return set_data_dir(env)
 
     if in_colab() and not Path("/content/drive/MyDrive").exists():
-        from google.colab import drive
-        drive.mount("/content/drive")
+        _mount_or_fallback()
+        if _remote is not None:
+            return _data_dir
 
     for cand in _candidate_dirs():
         if cand.is_dir():
@@ -155,7 +262,10 @@ def _normalize(date: str, time: str) -> tuple[str, str]:
 def load_scan(date: str, time: str, verbose: bool = True) -> Scan:
     """Load ``<data dir>/<date>/<time> Scan Data.csv``."""
     date, time = _normalize(date, time)
-    path = get_data_dir() / date / f"{time} Scan Data.csv"
+    name = f"{time} Scan Data.csv"
+    path = get_data_dir() / date / name
+    if _remote is not None and not path.exists():
+        _remote.download(date, name, path)
     if not path.exists():
         available = list_scans(date)
         hint = f" Scans on {date}: {', '.join(available)}" if available else ""
@@ -171,9 +281,17 @@ def list_scans(date: str) -> list[str]:
     """List the scan times available on a given date, e.g. ``list_scans('2026.11.02')``."""
     date, _ = _normalize(date, "")
     folder = get_data_dir() / date
-    return sorted(p.name.replace(" Scan Data.csv", "") for p in folder.glob("* Scan Data.csv"))
+    suffix = " Scan Data.csv"
+    if _remote is not None:
+        names = _remote.list_files(date)
+    else:
+        names = [p.name for p in folder.glob("*" + suffix)]
+    return sorted(n[: -len(suffix)] for n in names if n.endswith(suffix))
 
 
 def list_dates() -> list[str]:
     """List all date folders in the data directory."""
-    return sorted(p.name for p in get_data_dir().iterdir() if p.is_dir())
+    data_dir = get_data_dir()
+    if _remote is not None:
+        return sorted(_remote.list_dates())
+    return sorted(p.name for p in data_dir.iterdir() if p.is_dir())

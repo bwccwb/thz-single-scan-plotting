@@ -12,6 +12,12 @@ Open `plot_scans.ipynb` in Colab (File → Open notebook → GitHub tab, paste t
 The first cell installs the package and Drive is mounted automatically. Edit the `scans`
 list and the form fields, then run.
 
+If mounting Drive fails (Colab sometimes breaks with *"credential propagation was
+unsuccessful"*), thzplot automatically falls back to the Google Drive API: you sign in once,
+and only the scans you plot are downloaded into `/content/thz_data`. Everything else works
+the same, except that saving figures to `/content/drive/...` isn't possible in that mode.
+Save to e.g. `/content/fig1.pdf` instead and download it from the Files panel.
+
 ## Use on your own computer
 
 1. Install **[Google Drive for Desktop](https://www.google.com/drive/download/)**. Your Drive
